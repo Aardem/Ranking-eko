@@ -1,0 +1,416 @@
+---
+title: "Budowa rankingu ekologicznoœci polskich miast za pomoc¹ metod porz¹dkowania liniowego"
+author: "Artur Karamon"
+date: "15 grudnia 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,comment = NA,null_prefix=TRUE)
+
+```
+
+```{r, include=FALSE}
+# ³adowanie bibliotek
+library("TSdist")
+library("ggplot2")
+library("dplyr")
+library("tidyr")
+library("psych")
+library("stats")
+library("cluster")
+library("kableExtra")
+library("gridExtra")
+library("grid")
+``` 
+
+## Wprowadzenie
+
+Projekt ten porusza temat konstruowania rankingów z wykorzystaniem ró¿nych metod porz¹dkowania liniowego. Ca³oœæ pracy sk³ada siê z dwóch czêœci. Pierwsz¹ z nich jest stworzenie funkcji pozwalaj¹cej na wykonanie takich rankingów. Druga czêœæ zawiera natomiast u¿ycie uprzednio zrobionej funkcji na wybranych danych oraz wizualizacja uzyskanych wyników.<br>
+Dane wykorzystane w pracy dotycz¹ zagadnienia szarokopojêtej ekologii oraz ochrony œrodowiska w najwiêkszych polskich miastach. Pochodz¹ one z 2017 roku z Banku Danych Lokalnych i obejmuj¹:<br>
+
+   * udzia³ terenów zielonych w stosunku do ca³kowitej powierzchni miasta w procentach(**udzial_terenow_ziel**)   
+   * liczbê pojazdów zasilanych paliwami p³ynnymi, tj.benzyna i olej napêdowy, zarejestrowanych w mieœcie(**pojazdy_paliwa_plynne**)  
+   * zu¿ycie wody w mieœcie w ci¹gu roku w dekmetrach szeœciennych(**zuzycie_wody**)  
+   * wyworzone odpady w ci¹gu roku, które nie zosta³y zneutralizowane, tj. nie zosta³y poddane odzyskowi lub unieszkodliwione, w tys.                 ton(**odpady_niezneutralizowane**)   
+   * udzia³ odpadów zbieranych selektywnie w stosunku do ogó³u w procentach(**odpady_selektywnie_do_ogolu**)  
+   * wskaŸnik okreœlaj¹cy ³adunek zanieczyszczeñ w œciekach po oczyszczeniu, konstruowany jako iloraz Chzt-chemicznego zapotrzebowania    na tlen oraz Bzt5-bochemicznego zapotrzebowania na tlen(**wsk_ladunek_scieki**)    
+   * wskaŸnik jakoœci powietrza, powsta³y przez zsumowanie ilorazów œrednich wartoœci rocznych SO2, NO2, PM10 zawartych w powietrzu do    odpowiednich dla nich wartoœci krytycznych(**wsk_jakosc_powietrza**)   
+   * wydatki bud¿etu miasta na gospodarkê komunaln¹ i ochronê œrodowiska w z³otówkach w ci¹gu roku(**wydatki_ochrona_srod**)   
+  
+
+```{r, echo=FALSE}
+#wczytanie danych
+dane<-read.csv("Dane_ekologia.csv",sep = ";", dec = ",")
+```
+
+Zmienne pojazdy_paliwa_plynne, zuzycie_wody, odpady_niezneutralizowane, wydatki_ochrona_srod przeliczono w stosunku do 1000 mieszkañców miasta w celu umo¿liwienia porównywania ich wartoœci w ró¿nych miastach oraz przeprowadzono kilka innych operacji, aby uporz¹dkowaæ zbiór danych.(usuniêto obserwacje zawieraj¹ce braki w danych, wyselekcjonowano 25 najliczniejszych miast)<br>
+Okreœlono równie¿ charakter wszystkich zmiennych pod wzglêdem wp³ywu na ekologiê oraz ochronê œrodowiska w mieœcie. Powsta³e grupy: 
+
+   * **stymulanty:** udzial_terenow_ziel, odpady_selektywnie_do_ogolu, wydatki_ochrona_srod; im wiêksza wartoœæ, tym lepiej wp³ywa na ekologiê i ochronê œrodowiska  
+   * **destymulanty:** pojazdy_paliwa_plynne, zuzycie_wody, odpady_niezneutralizowane, wsk_jakosc_powietrza; im wiêksza wartoœæ, tym gorzej wp³ywa na ekologiê i ochronê œrodowiska  
+   * **nominanty:** wsk_ladunek_scieki; im wartoœæ jest bardziej oddalona od wartoœci optymalnej(wartoœæ optymalna dla tego wskaŸnika wg. opracowañ eksperckich to 6), tym gorzej wp³ywa na ekologiê i ochronê œrodowiska 
+
+```{r, include=FALSE}
+dane<-dane[,1:10]
+dane<-na.omit(dane)
+
+dane_wsk<-dane
+dane_wsk[,c(4:6,10)]<-dane[,c(4:6,10)]*1000/dane$ludnosc
+dane_wsk<-dane_wsk[rank(-dane_wsk$ludnosc)<=25,]
+
+rownames(dane_wsk)<-dane_wsk$Nazwa
+dane_wsk<-dane_wsk[,-c(1:2)]
+```  
+
+```{r, echo=FALSE}
+kable(dane_wsk,digits=2, align = "c",
+col.names = c("udzial_terenow _ziel", "pojazdy_ paliwa_ plynne_", "zuzycie_ wody", "odpady_ niezneutralizowane_", "odpady_ selektywnie_ do_ogolu", "wsk_ladunek_ scieki", "wsk_jakosc_ powietrza", "wydatki_ ochrona_ srodowiska_")) %>% kable_styling(full_width = F,position="center",bootstrap_options = c("striped", "hover", "condensed", "responsive"))%>%
+  column_spec(c(2,6,9), bold = T, color = "black", background = "lightgreen")%>%
+  column_spec(c(3:5,8), bold = T, color = "black", background = "#F08080")%>%
+  column_spec(c(7), bold = T, color = "black", background = "lightblue")
+```
+
+Nastêpnie obliczono podstawowe statystyki opisowe dla zbioru, takie jak œrednia, mediana, odchylenie standardowe, kurtoza itp., a tak¿e wygenerowane wykresy pude³kowe oraz histogramy w celu jego lepszego scharakteryzowania.  
+Tabela statystyk opisowych dla ka¿dej zmiennej:
+
+```{r, echo=FALSE}
+kable(describe(dane_wsk)[c(2:5,8:13)],digits=2, align = "c") %>% kable_styling(full_width = F,position="center",bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+```{r ,fig.align='center',fig.width=8,out.extra='angle=90', echo=FALSE}
+w1<-cbind(dane_wsk,czynnik=rep(colnames(dane_wsk)[1],nrow(dane_wsk)))    %>%
+  ggplot(aes(x = czynnik, y = udzial_terenow_ziel)) +
+  geom_boxplot(fill="red")+
+  labs(x="")
+w2<-cbind(dane_wsk,czynnik=rep(colnames(dane_wsk)[2],nrow(dane_wsk)))    %>%
+  ggplot(aes(x = czynnik, y = pojazdy_paliwa_plynne)) +
+  geom_boxplot(fill="orange")+
+  labs(x="") 
+w3<-cbind(dane_wsk,czynnik=rep(colnames(dane_wsk)[3],nrow(dane_wsk)))    %>%
+  ggplot(aes(x = czynnik, y = zuzycie_wody)) +
+  geom_boxplot(fill="yellow")+
+  labs(x="") 
+w4<-cbind(dane_wsk,czynnik=rep(colnames(dane_wsk)[4],nrow(dane_wsk)))    %>%
+  ggplot(aes(x = czynnik, y = odpady_niezneutralizowane)) +
+  geom_boxplot(fill="green")+
+  labs(x="")
+w5<-cbind(dane_wsk,czynnik=rep(colnames(dane_wsk)[5],nrow(dane_wsk)))    %>%
+  ggplot(aes(x = czynnik, y = odpady_selektywnie_do_ogolu)) +
+  geom_boxplot(fill="blue")+
+  labs(x="") 
+w6<-cbind(dane_wsk,czynnik=rep(colnames(dane_wsk)[6],nrow(dane_wsk)))    %>%
+  ggplot(aes(x = czynnik, y = wsk_ladunek_scieki)) +
+  geom_boxplot(fill="purple")+
+  labs(x="") 
+w7<-cbind(dane_wsk,czynnik=rep(colnames(dane_wsk)[7],nrow(dane_wsk)))    %>%
+  ggplot(aes(x = czynnik, y = wsk_jakosc_powietrza)) +
+  geom_boxplot(fill="pink")+
+  labs(x="") 
+w8<-cbind(dane_wsk,czynnik=rep(colnames(dane_wsk)[8],nrow(dane_wsk)))    %>%
+  ggplot(aes(x = czynnik, y = wydatki_ochrona_srod)) +
+  geom_boxplot(fill="black")+
+  labs(x="")
+
+grid.arrange(w1, w2, w3, w4,w5,w6,w7,w8, 
+             ncol = 4, nrow = 2,top=textGrob("Wykresy pude³kowe dla zmiennych charakteryzuj¹cych miasta", gp=gpar(fontsize=12)))
+```
+
+```{r,fig.align='center',out.extra='angle=90', echo=FALSE}
+w<-c()
+for (i in 1:ncol(dane_wsk)) {
+  breaks <- pretty(range(dane_wsk[,i]), n = nclass.FD(dane_wsk[,i]), min.n = 1)
+  bwidth <- breaks[2]-breaks[1]
+  w[i]<-bwidth
+}
+
+w1<-dane_wsk %>%
+  ggplot(aes(udzial_terenow_ziel)) +
+  geom_histogram(binwidth=w[1],fill="red")+
+  labs(y="")
+w2<-dane_wsk %>%
+  ggplot(aes(pojazdy_paliwa_plynne)) +
+  geom_histogram(binwidth=w[2],fill="orange")+
+  labs(y="")
+w3<-dane_wsk %>%
+  ggplot(aes(zuzycie_wody)) +
+  geom_histogram(binwidth=w[3],fill="yellow")+
+  labs(y="")
+w4<-dane_wsk %>%
+  ggplot(aes(odpady_niezneutralizowane)) +
+  geom_histogram(binwidth=w[4],fill="green")+
+  labs(y="")
+w5<-dane_wsk %>%
+  ggplot(aes(odpady_selektywnie_do_ogolu)) +
+  geom_histogram(binwidth=w[5],fill="blue")+
+  labs(y="")
+w6<-dane_wsk %>%
+  ggplot(aes(wsk_ladunek_scieki)) +
+  geom_histogram(binwidth=w[6],fill="purple")+
+  labs(y="")
+w7<-dane_wsk %>%
+  ggplot(aes(wsk_jakosc_powietrza)) +
+  geom_histogram(binwidth=w[7],fill="pink")+
+  labs(y="")
+w8<-dane_wsk %>%
+  ggplot(aes(wydatki_ochrona_srod)) +
+  geom_histogram(binwidth=w[8],fill="black")+
+  labs(y="")
+
+grid.arrange(w1, w2, w3, w4,w5,w6,w7,w8, 
+             ncol = 2, nrow = 4,top="Histogramy dla zmiennych charakteryzuj¹cych miasta") 
+```
+
+Na podstawie otrzymanych statystyk oraz wykresów mo¿na wyci¹gn¹c cenne informacje. Pierwsze, co rzuca siê w oczy to bardzo zró¿nicowane wartoœci œrednich w zale¿noœci od czynnika. Jest to zrozumia³e, gdy¿ zmienne wyra¿ane s¹ w ró¿nych jednostkach. Najwiêksze wartoœci przyjmuje zmienna wydatki_ochrona_srod, natomiast najmniejsze wsk_jakosc_powietrza. Odchylenia standardowe w wiêkszoœci nie osi¹gaj¹ du¿ych rezultatów, z wyj¹tkiem zmiennej odpady_niezneutralizowane, gdzie odchylenie jest znacznie wiêksze ni¿ œrednia. Wartoœci skrajne dla kolejnych cech przyjmuj¹ miasta: Bydgosz i Zielona Góra, Bia³ystok i Poznañ, Zabrze i Szczecin, Toruñ i Rybnik, Zielona Góra i Sosnowiec, Gliwice i Gdañsk, Katowice i Bia³ystok, Radom i Kraków. Jak widaæ w wiêkszoœci siê one nie powtarzaj¹, co oznacza, ¿e wzorzec bêdzie sk³ada³ siê z wybranych czynników ró¿nych miast. We wszystkich zmiennych wystêpuje skoœnoœæ prawostronna, w niektórych przypadkach jest ona minimalna, a w innych trochê wiêksza. Trzy zmienne: zuzycie_wody, odpady_niezneutralizowane oraz odpady_selektywnie_do_ogolu posiadaj¹ siln¹ koncentracjê wartoœci wokó³ œredniej, o czym œwiadczy kurtoza, natomiast pozosta³e s¹ raczej s³abo skupione. Na wykresach pude³kowych mo¿na zauwa¿yæ kilka outlierów, jednak nie zosta³y one usuniête, gdy¿ wartoœci te wydaj¹ siê realne i mo¿na je w logicznie uargumentowaæ. Wszystkie zmienne uznaje siê za zmienne ci¹g³e.
+
+## Analiza i wizualizacja
+
+Do przeprowadznia wszystkich badañ konieczne jest wczytanie odpowiednich bibliotek.
+<br>
+
+```{r, message=FALSE}
+# ³adowanie bibliotek
+library("TSdist")
+library("ggplot2")
+library("dplyr")
+library("tidyr")
+library("psych")
+library("stats")
+library("cluster")
+library("kableExtra")
+library("gridExtra")
+library("maps")
+library("SmarterPoland")
+library("ggrepel")
+``` 
+
+### Czêœæ I
+
+W pierwszej czêœci projektu stworzono funkcjê pozwalaj¹c¹ na generowanie rankingów metod¹ porz¹dkowania liniowego na podstawie ramki danych. Funkcja ranking() przyjmuje nastêpuj¹ce argumenty:  
+
+  * **dframe** - ramka danych, argument obowi¹zkowy  
+  * **method** - metoda("hellwig","stand_sum", "suma_rang"), domyœlnie hellwig, argument opcjonalny  
+  * **var_types_vect** - wektor zawieraj¹cy charakter zmiennych znajduj¹cych siê w ka¿dej kolumnie(s-stymulanta,d-destymulanta,n-nominanta), domyœlnie wszystkie stymulanty, argument opcjonalny  
+  * **optimum_vect** - wektor wartoœci optymalnych, argument opcjonalny  
+  * **weight_vect** - wektor wag dla zmiennych w ka¿dej kolumnie,domyœlnie wszystkie wagi jednakowe, argument opcjonalny  
+  * **weight_auto** - wartoœæ logiczna(TRUE/FALSE), okreœlaj¹ca czy wagi zmiennych maj¹ zostaæ wygenerowane wprost proporcjonalnie do
+stopnia informacyjnoœci cech automatycznie, domyœlnie FALSE, argument opcjonalny. 
+
+Funkcja ranking() zwraca listê zawieraj¹c¹ trzy ramki danych: ramkê nieuporz¹dkowan¹, ale z przypisanymi rangami, ramk¹ uporz¹dkowan¹ oraz ramkê przejœciow¹ zawieraj¹c¹ standaryzowane zmienne oraz wykonywane obliczenia.
+
+
+```{r}
+ranking<-function(dframe, method="hellwig", var_types_vect = rep("s",ncol(dframe)), optimum_vect, 
+                  weight_vect = rep(1,ncol(dframe)),weight_auto=FALSE){
+  
+  dframe_transform<-dframe
+  i_opt<-0
+  #zamiana nominant i destymulant na stymulanty
+  for (i_col in 1:ncol(dframe)) {
+    if (var_types_vect[i_col]=="d") {
+      dframe_transform[,i_col]<--dframe_transform[,i_col]
+    } 
+    if (var_types_vect[i_col]=="n") {
+      i_opt<-i_opt+1
+      dframe_transform[,i_col]<--abs(optimum_vect[i_opt]-dframe_transform[,i_col])
+    }
+  }
+  #skalowanie wartosci zmiennych
+  dframe_transform<-as.data.frame(scale(dframe_transform))
+  
+  #nadawanie wag zmiennych, w przypadku wyboru opcji automatycznego doboru
+  if (weight_auto==TRUE) {
+    sd_mean<-apply(piwo,2,sd)/apply(piwo,2,mean)
+    weight_vect<-sd_mean/sum(sd_mean)
+  }
+  
+  #porzadkowanie metoda hellwiga
+  if(method=="hellwig"){
+    #nalozenie wag na standaryzowane dane
+    dframe_transform<-dframe_transform*as.list(weight_vect)
+    #ustalenie wektora zawieraj¹cego najlepsze wartosci("wzor")
+    dframe_transform_max<-apply(dframe_transform,2,max)
+    distance_vect<-NULL
+    #obliczenie odleglosci euklidesowych kazdej z oberwacji od "wzoru"
+    for (i in 1:nrow(dframe_transform)) {
+      distance<-EuclideanDistance(as.numeric(dframe_transform[i,]),dframe_transform_max)
+      distance_vect<-c(distance_vect,distance)
+    }
+    dframe_transform<-cbind(dframe_transform,EDist=distance_vect)
+    #wyznaczenie miary dla kazdego z obiektow
+    hellwig_dframe<-1-(dframe_transform[,ncol(dframe_transform)]/(mean(dframe_transform[,ncol(dframe_transform)]) + 2 * sd(dframe_transform[,ncol(dframe_transform)])))
+    dframe_transform<-cbind(dframe_transform,hellwig = -hellwig_dframe)
+    
+    #dopisanie pozycji do kazdego obiektu
+    dframe_unordered<-cbind(dframe,hellwig = hellwig_dframe,rank=round(rank(-hellwig_dframe, ties.method = "first"),digits = 0))
+    #uprzadkowanie wg. rankingu
+    dframe_rank<-dframe_unordered[order(dframe_unordered$rank),]
+    
+  }
+  #porzadkowanie metoda standaryzowanych sum
+  if(method=="stand_sum"){
+    #nalozenie wag na standaryzowane dane
+    dframe_transform<-dframe_transform*as.list(weight_vect)
+    
+    #uzyskanie wektora sum dla kazdej obserwacji, a nastepnie standaryzacja sum
+    stand_sum_vect<-apply(dframe_transform,1,sum)
+    stand_sum_vect<-(stand_sum_vect-min(stand_sum_vect))/(max(stand_sum_vect-min(stand_sum_vect)))
+    dframe_transform<-cbind(dframe_transform,stand_sum = stand_sum_vect)
+    
+    #dopisanie pozycji do kazdego obiektu
+    dframe_unordered<-cbind(dframe,stand_sum = stand_sum_vect,rank=round(rank(-stand_sum_vect, ties.method = "first"),digits = 0))
+    #uprzadkowanie wg. rankingu
+    dframe_rank<-dframe_unordered[order(dframe_unordered$rank),]
+  }
+  #porzadkowanie metoda sumy rang
+  if(method=="suma_rang"){
+    #utworzenie dodatkowych kolumn zawierajacych rangi wg. kazdej ze zmiennych
+    for (i_col in 1:ncol(dframe)) {
+      new_col<-paste0("rank",i_col)
+      dframe_transform<-cbind(dframe_transform,rank(-dframe_transform[,i_col],ties.method = "average"))
+      colnames(dframe_transform)[i_col+ncol(dframe)]<-new_col
+    }
+    #nalozenie wag na rangi
+    dframe_transform[,(ncol(dframe)+1):ncol(dframe_transform)]<-dframe_transform[,(ncol(dframe)+1):ncol(dframe_transform)]*as.list(weight_vect)
+    
+    #zsumowanie rang 
+    rank_sum_vect<-apply(dframe_transform[,(ncol(dframe)+1):ncol(dframe_transform)],1,mean)
+    dframe_transform<-cbind(dframe_transform,rank_sum = -rank_sum_vect)
+    
+    #dopisanie pozycji do kazdego obiektu
+    dframe_unordered<-cbind(dframe,rank_sum = rank_sum_vect,rank=round(rank(rank_sum_vect, ties.method = "first"),digits = 0))
+    #uprzadkowanie wg. rankingu
+    dframe_rank<-dframe_unordered[order(dframe_unordered$rank),]
+  }
+  #zwrocenie wejsciowej ramki danych z dodanymi rangami dla kazdej obserwacji
+  return(list(dframe_unordered,dframe_rank,dframe_transform))  
+}
+``` 
+
+
+### Czêœæ II - Budowanie rankingu ekologicznoœci najwiêkszych polskich miast
+
+W tej czêœci zbudowano ranking najwiêkszych polskich miast pod wzglêdem ekologii oraz ochrony œrodowiska z wykorzystaniem funkcji ranking(). U¿yto do tego celu ró¿nych metod, tj. metody Hellwiga, metody standaryzowanych sum oraz metody sumy rang, aby jak najpe³niej zobrazowowaæ ogóln¹ kolejnoœæ miast, a tak¿e porównaæ otrzymymane wyniki.
+<br>
+
+**Hipoteza badawcza:**<br>
+Miasta po³udniowej Polski, które w du¿ej mierze wykorzystuj¹ przemys³ wydobywczy oraz znajduj¹ siê w bliskiej odleg³oœci miêdzy sob¹ osi¹gaj¹ gorsze wyniki w rankingu ekologicznoœci w porównaniu z miastami nadmorskimi, gdy¿ warunki te negatywnie wp³ywaj¹ na rozpatrywane czynniki opisuj¹ce miasta w badaniu.
+<br>
+
+Dane, na których pracowano przedstawia poni¿sza tabela. Ju¿ na jej podstawie mo¿na zuwa¿yæ, które miasta osi¹gaj¹ najwy¿sze wartoœci, a które najni¿sze.
+
+```{r fig5, fig5.width = 3, fig5.asp = .62, echo=FALSE}
+cbind("miasto"=rownames(dane_wsk),round(dane_wsk,digits=2) %>%
+  mutate_if(is.numeric, function(x) {
+    cell_spec(x, bold = T, 
+              color = spec_color(x, end = 0.9))
+  })) %>%
+kable(escape=FALSE,digits=2, align = "c",
+col.names = c("miasto", "udzial_terenow _ziel", "pojazdy_ paliwa_ plynne_", "zuzycie_ wody", "odpady_ niezneutralizowane_", "odpady_ selektywnie_ do_ogolu", "wsk_ladunek_ scieki", "wsk_jakosc_ powietrza", "wydatki_ ochrona_ srodowiska_")) %>% kable_styling(full_width = F,position="center",bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+``` 
+
+<br>
+Na pocz¹tku wygenerowane zosta³y 3 rankingi z u¿yciem metod: Hellwiga, standaryzowanych sum oraz sumy rang.
+
+```{r}
+ranking_hellwig<-ranking(dane_wsk, "hellwig",c("s","d","d","d","s","n","d","s"),c(6))
+ranking_stand_sum<-ranking(dane_wsk, "stand_sum",c("s","d","d","d","s","n","d","s"),c(6))
+ranking_suma_rang<-ranking(dane_wsk, "suma_rang",c("s","d","d","d","s","n","d","s"),c(6))
+``` 
+
+Zmienne po zamianie na stymulanty oraz standaryzacji pozwalaj¹ otrzymaæ wiele informacji najlepszych wartoœciach w danej kategorii. Ju¿ w tym miejscu mo¿na wskazaæ kilku faworytów.
+
+```{r fig, fig.width = 5, fig.asp = .62, echo=FALSE}
+cbind("miasto"=rownames(dane_wsk),round(ranking_hellwig[[3]][,-c(9,10)],digits=2) %>%
+  mutate_if(is.numeric, function(x) {
+    cell_spec(x, bold = T, 
+              color = spec_color(x, end = 1),
+              font_size = spec_font_size(x))
+  })) %>%
+  kable(escape=F,digits=0, align = "c",
+col.names = c("miasto", "udzial_terenow _ziel", "pojazdy_ paliwa_ plynne_", "zuzycie_ wody", "odpady_ niezneutralizowane_", "odpady_ selektywnie_ do_ogolu", "wsk_ladunek_ scieki", "wsk_jakosc_ powietrza", "wydatki_ ochrona_ srodowiska_")) %>% kable_styling(full_width = F,position="center",bootstrap_options = c("striped", "hover", "condensed", "responsive"))%>%
+  column_spec(1:8, width = "2cm")
+
+``` 
+
+<br>
+Po zakoñczeniu porz¹dkowania mo¿liwe jest zwizualizowanie otrzymanych wynikiów.  
+Tabela porównawcza, kolejnoœæ dla ró¿nych metod:
+<br>
+
+```{r, echo=FALSE}
+ranking_hss<-cbind(ranking_hellwig[[2]][9],"miasto"=rownames(ranking_hellwig[[2]]),"stand_sum"=ranking_stand_sum[[2]][,9],"miasto"=rownames(ranking_stand_sum[[2]]),"suma_rang"=ranking_suma_rang[[2]][,9],"miasto"=rownames(ranking_suma_rang[[2]]))
+rownames(ranking_hss)<-1:25
+ranking_hss<-cbind("pozycja"=1:25,ranking_hss)
+
+kable((ranking_hss),digits=2) %>% kable_styling(full_width = F,position="center",bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+``` 
+
+<br>
+Drugi sposób przedstawienia rezultatów to wykres, na którym mo¿na porównaæ jak dane miasto wypad³o w ka¿dym rankingu.
+<br>
+
+
+```{r fig3, fig.width = 11, fig.asp = .62, echo=FALSE}
+rank_df<-data.frame(nazwa=rownames(ranking_hellwig[[1]]),stand_sum=as.numeric(ranking_stand_sum[[1]]$rank),suma_rang=as.numeric(ranking_suma_rang[[1]]$rank),hellwig=as.numeric(ranking_hellwig[[1]]$rank))
+
+df<-data.frame("miasto"=rep(rank_df[,1],3),"pozycja"=c(rank_df[,2],rank_df[,3],rank_df[,4]),"metoda"=c(rep("suma_rang",25),rep("stand_sum",25),rep("hellwig",25)))
+
+ggplot(data=df,aes(y=pozycja,x=miasto,colour=metoda,shape=metoda))+
+  geom_point(size=4,alpha=0.4,position=position_jitter(height = 0.2,width=0.2))+
+  ggtitle("Wykres pozycji w rankingu wg. ró¿nych metod")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  labs(x = "miasto", y = "pozycja", colour="metoda")+
+  theme(axis.text.x = element_text(angle=90))+
+  scale_y_reverse(breaks=c(1:25))
+
+```
+
+<br>
+Stworzono równie¿ mapkê, na której kolory znaczników oznaczaj¹ uœrednione miejsca w rankingu pochodz¹ce z trzech metod.
+<br>
+
+```{r ,include=FALSE, echo=FALSE}
+poland <- map("world","poland", fill=T, col="white")
+miasta<-getMPpowiaty()
+data(world.cities)
+cities_lon_lat <- world.cities[!duplicated(world.cities$name),]
+rownames(cities_lon_lat) = cities_lon_lat[,1]
+cities_lon_lat <- cities_lon_lat[cities_lon_lat$country.etc == "Poland",]
+nazwy_miast<-rownames(dane_wsk)
+nazwy_miast[7]<-"Cracow"
+nazwy_miast[9]<-"Warsaw"
+nazwy_miast[13]<-"Bielsko-Biala"
+lon_miasta<-(sapply(nazwy_miast,function(x){cities_lon_lat[cities_lon_lat$name == x,]$lon}))
+lat_miasta<-(sapply(nazwy_miast,function(x){cities_lon_lat[cities_lon_lat$name == x,]$lat}))
+cities_coords<-data.frame("miasto"=rownames(dane_wsk),"lon"=unlist(lon_miasta),"lat"=unlist(lat_miasta),stringsAsFactors = FALSE)
+rownames(cities_coords)<-NULL
+poland<-data.frame("lon"=poland$x,"lat"=poland$y)
+```
+
+```{r , fig.align='center',echo=FALSE,fig.width = 10, fig.asp = .62, message=FALSE, warning=FALSE}
+
+ggplot() + geom_polygon(data = poland, aes(x=lon, y = lat),fill="#ffe6e6",col="black") + 
+  coord_fixed(1.5)+
+  geom_point(data=cities_coords, aes(x=lon, y = lat,col=((ranking_hellwig[[1]]$rank+ranking_stand_sum[[1]]$rank+ranking_suma_rang[[1]]$rank)/3)),size=3)+
+  theme_void()+
+  labs(col="ranking")+ 
+  geom_label_repel(data = cities_coords, aes(x=lon, y = lat,label = miasto),
+                  box.padding   = 0.35, 
+                  point.padding = 0.5,
+                  segment.color = 'grey50')+
+  scale_colour_gradient(low = "green", high = "red")
+
+
+```
+
+<br>
+**Obserwacje i interpretacja:**<br>
+Na wykresie wyraŸnie widaæ, ¿e jednoznacznie we wszystkich rankingach zwyciê¿y³o miasto Sosnowiec. Wydaje siê to zaskakuj¹ce, jednak, na podstawie zmiennych sk³adaj¹cych siê na wynik mo¿na zauwa¿yæ, ¿e w g³ównej mierze przyczyni³ siê do tego bardzo wysoki procent odpadów zbieranych selektywnie w stosunku do ogó³u oraz stosunkowo niewielkie wartoœci zu¿ycia wody oraz odpadów niezneutralizowanych dla tego miasta. Na kolejnych miejscach rankingów nie jest ju¿ tak jednoznacznie, jednak kilka miast w ró¿nej konfiguracji wystêpuje na zbli¿onych pozycjach. S¹ wœród nich Bytom(2,7,7), Bydgoszcz(5,4,5), Lublin(7,3,2), Bia³ystok(10,2,4). Za ka¿dym razem natomiast Katowice zajmuj¹ ostanie miejsce, g³ównie za spraw¹ najni¿szego wskaŸnika jakoœci powietrza oraz udzia³u odapdów zbieranych selektywnie w stosunku do ogó³u, ale tak¿e du¿ej liczbie samochodów zasilanych paliwami ciek³ymi oraz wartoœci wskaŸnika ³adunku œcieków. Postawiona hipoteza nie mo¿e zostaæ potwierdzona. Chocia¿ wiêkszoœæ œl¹skich miast znajduje siê na dalszych pozycjach rankingu, oprócz Katowic s¹ to Rybnik, Ruda Œl¹ska czy Gliwice, to miasta takie jak Gdañsk i Szczecin równie¿ plasuj¹ siê w dalszej czêœci stawki. Co do ró¿nic pomiêdzy zastosowanymi metodami, naturalnie nasuwaj¹cym siê wnioskiem jest fakt, ¿e metoda Hellwiga w najwiêkszym stopniu uzwglêdnie ró¿nice w pojedynczej cesze, podczas gdy metoda standaryzowanych sum robi to w mniejszym stopniu, a metoda sumy rang traktuje ka¿d¹ ró¿nice tak samo. Wszystkie tej podejœcia maj¹ swoje plusy i minusy, jednak jeœli chce siê osi¹gn¹æ pewien kompromis najlepsza wydaje siê metoda standaryzowanych sum.<br>
+
+
+## Zakoñczenie 
+**Wnioski:**<br>
+Podsumowuj¹c, wyniki uzyskane ró¿nymi metodami zawieraj¹ istotne róznice. Jednak¿e pozycja wielu miast nie ulega zmianie lub jest doœæ podobna. Najlepszym przyk³adem na to s¹ pierwsze i ostatnie miasto w rankingu, kolejno Sosnowiec i Katowice. Oznacza to, ¿e gdy wyniki s¹ zbli¿one, miejsca w rankingu mog¹ nie byæ do koñca wiarygodne i w zale¿noœci od metody mog¹ ró¿niæ siê o kilka pozycji w górê lub w dó³. Natomiast znaczne ró¿nice s¹ przez te rankingi bardzo dobrze wychwytywane i bardziej wiarygodne.  
+W uzyskiwanych wynikach du¿e znaczenie maj¹ przeprowadzone operacje i podjête decyzje(czy usun¹æ outliery, czy zastosowaæ wagi). Z du¿¹ pewnoœci¹ mo¿na stwierdziæ, ¿e zmiana którejœ z nich sprawi³aby du¿e ró¿nice w wynikach, dlatego w celu osi¹gniêcia wiêkszej pewnoœci i wiarygodnoœci w stwierdzeniu wy¿szoœci danej obserwacji nad inn¹ lepiej zastosowaæ inne narzêdzia ekonometryczne.
+
